@@ -1,0 +1,90 @@
+<script>
+	<name>Combine Date and Time Fields</name>
+	<version>1</version>
+	<description>This workspace script combines a date field and a text field which holds a time value into a single date time field</description>
+	<category>Case Functionality</category>
+	<input orientation="horizontal">
+		<field id="iDateField" name="Date Field:">
+			<filters>
+				<type>2</type>
+				<category>0</category>
+			</filters>
+		</field>
+		<field id="iTimeField" name="Time Field:">
+			<filters>
+				<type>0</type>
+				<category>0</category>
+			</filters>
+		</field>
+		<field id="iDestinationDateField" name="Destination Date Field:">
+			<filters>
+				<type>2</type>
+				<category>0</category>
+			</filters>
+		</field>
+	</input>
+	<display type="itemlist" />
+	<action returns="table" timeout="1200"><![CDATA[
+	
+
+/*
+	Description: This workspace script combines a date field and a fixed length text field which holds a time value into a single date time field.
+		Documents will only be updated when all of the following are true:
+			Destination date field is NULL
+			Date field is NOT NULL
+			Time field is NOT NULL
+			Time field is valid
+		We update the documents in batches of 100,000
+*/
+
+--Get documents to update with the combined date and time value
+IF NOT OBJECT_ID('EDDSDBO.DocumentsToUpdate') IS NULL BEGIN DROP TABLE EDDSDBO.DocumentsToUpdate END
+CREATE TABLE EDDSDBO.DocumentsToUpdate
+	(
+		[ID] INT NOT NULL IDENTITY(1,1) 
+		,DocArtifactID INT PRIMARY KEY
+		,CombinedDateTime DATETIME
+	)
+
+INSERT INTO EDDSDBO.DocumentsToUpdate(DocArtifactID,CombinedDateTime)
+SELECT 
+	D.ArtifactID
+	,DATEADD(day, DATEDIFF(day,'19000101',D.#iDateField#), CONVERT(VARCHAR(10),CAST(D.#iTimeField# AS TIME(7)), 8)) 
+FROM EDDSDBO.[Document] D WITH(NOLOCK)
+WHERE D.#iDestinationDateField# IS NULL  --only update documents where the destination field is not set
+	AND D.#iDateField# IS NOT NULL --only update documents where the date field is set
+	AND D.#iTimeField# IS NOT NULL --only update documents where the time field is set
+	AND ISDATE(D.#iTimeField#) = 1 --only update documents where the time field is valid
+
+--Update in batches
+DECLARE @counter INT SET @counter = 0
+DECLARE @batchSize INT SET @batchSize = 100000
+DECLARE @updatedCount INT SET @updatedCount = 0
+DECLARE @totalCount INT SET @totalCount = (SELECT COUNT([ID]) FROM EDDSDBO.DocumentsToUpdate)
+
+WHILE @counter < @totalCount
+BEGIN
+	UPDATE D SET D.#iDestinationDateField# = K.CombinedDateTime
+	FROM EDDSDBO.DocumentsToUpdate K	
+		INNER JOIN EDDSDBO.Document D ON K.DocArtifactID = D.ArtifactID
+	WHERE [ID] > @counter
+		AND [ID] <= @counter + @batchSize
+
+	SET @updatedCount = @updatedCount + @@ROWCOUNT
+	SET @counter = @counter + @batchSize
+END
+
+--Display results
+DECLARE @totalDocCount INT 
+SET @totalCount = (SELECT COUNT(ArtifactID) FROM EDDSDBO.[Document] WITH(NOLOCK))
+
+SELECT 
+	@updatedCount [Number of Documents Updated]
+	,@totalCount - @updatedCount [Number of Documents Skipped]
+
+--Cleanup table
+IF NOT OBJECT_ID('EDDSDBO.DocumentsToUpdate') IS NULL BEGIN DROP TABLE EDDSDBO.DocumentsToUpdate END
+	
+
+	]]></action>
+</script>
